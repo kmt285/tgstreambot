@@ -7,6 +7,7 @@ from pyrogram.types import Message
 from pyrogram.enums import ParseMode
 from aiohttp import web
 import aiohttp
+import base64
 
 # --- Configurations ---
 API_ID = int(os.environ.get("API_ID"))
@@ -42,6 +43,15 @@ async def sync_channel_peer():
         print(f"Error syncing channel: {e}")
 
 # --- 2. File Extractor ---
+def encode_id(msg_id):
+    raw_str = f"software_{msg_id}_hub" # ရှေ့နောက်မှာ စာသားလေးတွေ ခံထားပါမယ်
+    return base64.urlsafe_b64encode(raw_str.encode()).decode().rstrip("=")
+
+def decode_id(hash_str):
+    padding = 4 - (len(hash_str) % 4)
+    decoded_bytes = base64.urlsafe_b64decode(hash_str + ("=" * padding))
+    return int(decoded_bytes.decode().split("_")[1])
+    
 def get_filename_and_mime(message: Message):
     file_obj = message.document or message.video or message.audio
     if not file_obj:
@@ -64,7 +74,8 @@ async def get_file_and_link(client: Client, message: Message):
         file_name, _ = get_filename_and_mime(message)
         
         base_url = URL.rstrip('/') if URL else "https://your-bot-url.onrender.com"
-        direct_link = f"{base_url}/download/{copied_msg.id}"
+        hash_id = encode_id(copied_msg.id)
+        direct_link = f"{base_url}/download/{hash_id}"
         
         reply_text = f"**File Name:** `{file_name}`\n\n**📥 Direct Download Link:**\n`{direct_link}`"
         await message.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
@@ -77,8 +88,9 @@ async def hello(request):
     return web.Response(text="Bot is awake and running smoothly!")
 
 async def download_file(request):
-    file_message_id = request.match_info['message_id']
+    hash_str = request.match_info['hash_id']
     try:
+        file_message_id = decode_id(hash_str)
         msg = await app.get_messages(chat_id=BIN_CHANNEL, message_ids=int(file_message_id))
         file_obj = msg.document or msg.video or msg.audio
         
@@ -107,7 +119,7 @@ async def download_file(request):
 async def init_web():
     web_app = web.Application()
     web_app.router.add_get('/', hello)
-    web_app.router.add_get('/download/{message_id}', download_file)
+    web_app.router.add_get('/download/{hash_id}', download_file)
     
     runner = web.AppRunner(web_app)
     await runner.setup()

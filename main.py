@@ -18,6 +18,25 @@ URL = os.environ.get("URL")
 
 app = Client("simple_stream_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+# --- 🛠️ Auto Keep-Alive System ---
+async def keep_alive():
+    """Render Server အိပ်မပျော်စေရန် ၅ မိနစ်တစ်ခါ ကိုယ့် URL ကို ပြန်ခေါ်မည့် စနစ်"""
+    if not URL:
+        print("⚠️ URL မထည့်ထားသဖြင့် Keep-alive အလုပ်မလုပ်ပါ။")
+        return
+        
+    while True:
+        await asyncio.sleep(5 * 60) # ၅ မိနစ် တစ်ခါ အလုပ်လုပ်မည်
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(URL) as response:
+                    if response.status == 200:
+                        print("✅ Keep-alive ping successful (Server stays awake!)")
+                    else:
+                        print(f"⚠️ Keep-alive ping returned status: {response.status}")
+        except Exception as e:
+            print(f"❌ Keep-alive error: {e}")
+
 # --- 2. File Extractor ---
 def encode_id(msg_id):
     raw_str = f"software_{msg_id}_hub" # ရှေ့နောက်မှာ စာသားလေးတွေ ခံထားပါမယ်
@@ -111,6 +130,7 @@ async def main():
     
     # 2. Web Server ကို စတင်မည်
     loop.create_task(init_web())
+    loop.create_task(keep_alive())
     
     # 3. 🔴 အရေးကြီးဆုံးအဆင့်: Pyrogram ကိုယ်တိုင် Channel ကို သွားမှတ်ခိုင်းမည်
     try:

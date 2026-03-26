@@ -2,7 +2,7 @@ import os
 import aiohttp
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pyrogram.enums import ParseMode  # ဒီအချက်လေး အသစ်ပါလာပါတယ်
+from pyrogram.enums import ParseMode
 import asyncio
 
 # --- Configurations ---
@@ -24,10 +24,10 @@ app = Client(
 @app.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def get_file_and_link(client: Client, message: Message):
     try:
-        # ၁။ ဖိုင်ကို Channel ထဲ သိမ်းရန် Forward လုပ်ခြင်း
-        forwarded_msg = await message.forward(chat_id=BIN_CHANNEL)
+        # ၁။ ဖိုင်ကို Channel ထဲ သိမ်းရန် Copy လုပ်ခြင်း (Forward အစား ပြောင်းထားပါသည်)
+        copied_msg = await message.copy(chat_id=BIN_CHANNEL)
         
-        # ၂။ ဖိုင်နာမည်ကို လုံခြုံစွာ ရယူခြင်း (နာမည်မရှိရင် Error မတက်အောင်)
+        # ၂။ ဖိုင်နာမည်ကို လုံခြုံစွာ ရယူခြင်း
         file_name = "Unknown_File"
         if message.document and getattr(message.document, 'file_name', None):
             file_name = message.document.file_name
@@ -37,9 +37,9 @@ async def get_file_and_link(client: Client, message: Message):
             file_name = message.audio.file_name
 
         # ၃။ Download Link တည်ဆောက်ခြင်း
-        # (URL ထည့်ဖို့မေ့နေခဲ့ရင်တောင် Error မတက်အောင် ကာကွယ်ထားပါတယ်)
         base_url = URL.rstrip('/') if URL else "https://your-bot-url.onrender.com"
-        direct_link = f"{base_url}/download/{forwarded_msg.id}"
+        # copied_msg ရဲ့ ID ကို ပြောင်းသုံးထားပါတယ်
+        direct_link = f"{base_url}/download/{copied_msg.id}"
         
         # ၄။ User ဆီ Link ပြန်ပို့ပေးခြင်း
         reply_text = f"**File Name:** `{file_name}`\n\n**📥 Direct Download Link:**\n`{direct_link}`"
@@ -47,7 +47,6 @@ async def get_file_and_link(client: Client, message: Message):
         await message.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
         
     except Exception as e:
-        # Error တက်ခဲ့ရင် အသံတိတ်မနေဘဲ Telegram ကနေ အကြောင်းကြားပေးပါမယ်
         await message.reply_text(f"❌ **Error ဖြစ်နေပါသည်:** `{str(e)}`")
         print(f"Error in get_file_and_link: {e}")
 

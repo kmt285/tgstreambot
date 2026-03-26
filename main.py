@@ -6,6 +6,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ParseMode
 from aiohttp import web
+import aiohttp
 
 # --- Configurations ---
 API_ID = int(os.environ.get("API_ID"))
@@ -16,7 +17,31 @@ URL = os.environ.get("URL")
 
 app = Client("simple_stream_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# ဖိုင်နာမည်နဲ့ အမျိုးအစားကို အလိုအလျောက် စစ်ဆေးပေးမည့် Function
+# --- 🛠️ 1. Auto-Sync Channel Peer (The Magic Fix) ---
+async def sync_channel_peer():
+    """Server Restart ဖြစ်တိုင်း Channel ကို မေ့သွားခြင်းမှ ကာကွယ်ရန်"""
+    await asyncio.sleep(3) # Server တက်ပြီး ၃ စက္ကန့် စောင့်မည်
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": BIN_CHANNEL, "text": "🔄 Server Synced!"}
+        
+        async with aiohttp.ClientSession() as session:
+            # Channel ထဲသို့ စာပို့၍ မှတ်ဉာဏ်နှိုးခြင်း
+            async with session.post(url, json=payload) as resp:
+                data = await resp.json()
+                if data.get("ok"):
+                    msg_id = data["result"]["message_id"]
+                    # ပို့ထားသောစာကို ချက်ချင်း ပြန်ဖျက်ခြင်း
+                    del_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+                    del_payload = {"chat_id": BIN_CHANNEL, "message_id": msg_id}
+                    await session.post(del_url, json=del_payload)
+                    print("✅ Channel Sync Complete! PeerIdInvalid prevented.")
+                else:
+                    print(f"⚠️ Sync Failed: {data}")
+    except Exception as e:
+        print(f"Error syncing channel: {e}")
+
+# --- 2. File Extractor ---
 def get_filename_and_mime(message: Message):
     file_obj = message.document or message.video or message.audio
     if not file_obj:
@@ -25,41 +50,35 @@ def get_filename_and_mime(message: Message):
     file_name = getattr(file_obj, "file_name", None)
     mime_type = getattr(file_obj, "mime_type", "application/octet-stream")
     
-    # Telegram က ဖိုင်နာမည် မပေးခဲ့ရင် Extension ကို အလိုအလျောက် ခန့်မှန်းမည်
     if not file_name:
         ext = mimetypes.guess_extension(mime_type) or ".bin"
         file_name = f"Telegram_File_{message.id}{ext}"
         
     return file_name, mime_type
 
+# --- 3. Message Handler ---
 @app.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def get_file_and_link(client: Client, message: Message):
     try:
-        # ၁။ Channel သို့ Copy ကူးခြင်း
         copied_msg = await message.copy(chat_id=BIN_CHANNEL)
-        
-        # ၂။ ဖိုင်နာမည်ကို စစ်ဆေးရယူခြင်း
         file_name, _ = get_filename_and_mime(message)
-
-        # ၃။ Link ထုတ်ပေးခြင်း
+        
         base_url = URL.rstrip('/') if URL else "https://your-bot-url.onrender.com"
         direct_link = f"{base_url}/download/{copied_msg.id}"
         
-        # ၄။ စာပြန်ပို့ခြင်း
         reply_text = f"**File Name:** `{file_name}`\n\n**📥 Direct Download Link:**\n`{direct_link}`"
         await message.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
         
     except Exception as e:
         await message.reply_text(f"❌ **Error:** `{str(e)}`")
 
-# --- Web Server (Download ဆွဲမည့်အပိုင်း) ---
+# --- 4. Web Server (Download Endpoint) ---
 async def hello(request):
     return web.Response(text="Bot is awake and running smoothly!")
 
 async def download_file(request):
     file_message_id = request.match_info['message_id']
     try:
-        # Channel ထဲမှ ဖိုင်ကို သွားရှာခြင်း
         msg = await app.get_messages(chat_id=BIN_CHANNEL, message_ids=int(file_message_id))
         file_obj = msg.document or msg.video or msg.audio
         
@@ -70,15 +89,12 @@ async def download_file(request):
         file_name, mime_type = get_filename_and_mime(msg)
 
         response = web.StreamResponse()
-        
-        # အရေးကြီးဆုံးပြင်ဆင်ချက်: Browser က ဖိုင်နာမည်ကို မှန်ကန်စွာဖတ်နိုင်ရန် Quote သုံးခြင်း
         safe_filename = quote(file_name)
         response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{safe_filename}"
         response.headers['Content-Type'] = mime_type
         
         await response.prepare(request)
 
-        # Telegram မှတစ်ဆင့် User ဆီသို့ တိုက်ရိုက် Stream လွှတ်ပေးခြင်း
         async for chunk in app.stream_media(file_id):
             await response.write(chunk)
             
@@ -100,8 +116,10 @@ async def init_web():
     await site.start()
     print(f"Web server started on port {port}")
 
+# --- 5. Main Run Block ---
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.create_task(init_web())
+    loop.create_task(sync_channel_peer()) # 👈 Auto-Sync ကို ဒီနေရာမှာ စတင်ခိုင်းထားပါတယ်
     print("Bot is starting...")
     app.run()

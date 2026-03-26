@@ -1,9 +1,11 @@
 import os
-import aiohttp
+import asyncio
+import mimetypes
+from urllib.parse import quote
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ParseMode
-import asyncio
+from aiohttp import web
 
 # --- Configurations ---
 API_ID = int(os.environ.get("API_ID"))
@@ -12,53 +14,52 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 BIN_CHANNEL = int(os.environ.get("BIN_CHANNEL"))
 URL = os.environ.get("URL")
 
-# --- Initialize Client ---
-app = Client(
-    "simple_stream_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
-)
+app = Client("simple_stream_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# --- Event Handler for Incoming Messages ---
+# ဖိုင်နာမည်နဲ့ အမျိုးအစားကို အလိုအလျောက် စစ်ဆေးပေးမည့် Function
+def get_filename_and_mime(message: Message):
+    file_obj = message.document or message.video or message.audio
+    if not file_obj:
+        return "Unknown_Media.bin", "application/octet-stream"
+        
+    file_name = getattr(file_obj, "file_name", None)
+    mime_type = getattr(file_obj, "mime_type", "application/octet-stream")
+    
+    # Telegram က ဖိုင်နာမည် မပေးခဲ့ရင် Extension ကို အလိုအလျောက် ခန့်မှန်းမည်
+    if not file_name:
+        ext = mimetypes.guess_extension(mime_type) or ".bin"
+        file_name = f"Telegram_File_{message.id}{ext}"
+        
+    return file_name, mime_type
+
 @app.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def get_file_and_link(client: Client, message: Message):
     try:
-        # ၁။ ဖိုင်ကို Channel ထဲ သိမ်းရန် Copy လုပ်ခြင်း (Forward အစား ပြောင်းထားပါသည်)
+        # ၁။ Channel သို့ Copy ကူးခြင်း
         copied_msg = await message.copy(chat_id=BIN_CHANNEL)
         
-        # ၂။ ဖိုင်နာမည်ကို လုံခြုံစွာ ရယူခြင်း
-        file_name = "Unknown_File"
-        if message.document and getattr(message.document, 'file_name', None):
-            file_name = message.document.file_name
-        elif message.video and getattr(message.video, 'file_name', None):
-            file_name = message.video.file_name
-        elif message.audio and getattr(message.audio, 'file_name', None):
-            file_name = message.audio.file_name
+        # ၂။ ဖိုင်နာမည်ကို စစ်ဆေးရယူခြင်း
+        file_name, _ = get_filename_and_mime(message)
 
-        # ၃။ Download Link တည်ဆောက်ခြင်း
+        # ၃။ Link ထုတ်ပေးခြင်း
         base_url = URL.rstrip('/') if URL else "https://your-bot-url.onrender.com"
-        # copied_msg ရဲ့ ID ကို ပြောင်းသုံးထားပါတယ်
         direct_link = f"{base_url}/download/{copied_msg.id}"
         
-        # ၄။ User ဆီ Link ပြန်ပို့ပေးခြင်း
+        # ၄။ စာပြန်ပို့ခြင်း
         reply_text = f"**File Name:** `{file_name}`\n\n**📥 Direct Download Link:**\n`{direct_link}`"
-        
         await message.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
         
     except Exception as e:
-        await message.reply_text(f"❌ **Error ဖြစ်နေပါသည်:** `{str(e)}`")
-        print(f"Error in get_file_and_link: {e}")
+        await message.reply_text(f"❌ **Error:** `{str(e)}`")
 
-# --- Simple web server to keep the service alive on Render ---
-from aiohttp import web
-
+# --- Web Server (Download ဆွဲမည့်အပိုင်း) ---
 async def hello(request):
-    return web.Response(text="Bot is running!")
+    return web.Response(text="Bot is awake and running smoothly!")
 
 async def download_file(request):
     file_message_id = request.match_info['message_id']
     try:
+        # Channel ထဲမှ ဖိုင်ကို သွားရှာခြင်း
         msg = await app.get_messages(chat_id=BIN_CHANNEL, message_ids=int(file_message_id))
         file_obj = msg.document or msg.video or msg.audio
         
@@ -66,14 +67,18 @@ async def download_file(request):
             raise web.HTTPNotFound(text="File not found in message.")
             
         file_id = file_obj.file_id
-        file_name = getattr(file_obj, 'file_name', f"file_{file_message_id}")
+        file_name, mime_type = get_filename_and_mime(msg)
 
         response = web.StreamResponse()
-        response.headers['Content-Disposition'] = f'attachment; filename="{file_name}"'
-        response.headers['Content-Type'] = 'application/octet-stream'
+        
+        # အရေးကြီးဆုံးပြင်ဆင်ချက်: Browser က ဖိုင်နာမည်ကို မှန်ကန်စွာဖတ်နိုင်ရန် Quote သုံးခြင်း
+        safe_filename = quote(file_name)
+        response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{safe_filename}"
+        response.headers['Content-Type'] = mime_type
         
         await response.prepare(request)
 
+        # Telegram မှတစ်ဆင့် User ဆီသို့ တိုက်ရိုက် Stream လွှတ်ပေးခြင်း
         async for chunk in app.stream_media(file_id):
             await response.write(chunk)
             

@@ -2,7 +2,7 @@ import os
 import asyncio
 import mimetypes
 from urllib.parse import quote
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message
 from pyrogram.enums import ParseMode
 from aiohttp import web
@@ -17,30 +17,6 @@ BIN_CHANNEL = int(os.environ.get("BIN_CHANNEL"))
 URL = os.environ.get("URL")
 
 app = Client("simple_stream_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-# --- 🛠️ 1. Auto-Sync Channel Peer (The Magic Fix) ---
-async def sync_channel_peer():
-    """Server Restart ဖြစ်တိုင်း Channel ကို မေ့သွားခြင်းမှ ကာကွယ်ရန်"""
-    await asyncio.sleep(3) # Server တက်ပြီး ၃ စက္ကန့် စောင့်မည်
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": BIN_CHANNEL, "text": "🔄 Server Synced!"}
-        
-        async with aiohttp.ClientSession() as session:
-            # Channel ထဲသို့ စာပို့၍ မှတ်ဉာဏ်နှိုးခြင်း
-            async with session.post(url, json=payload) as resp:
-                data = await resp.json()
-                if data.get("ok"):
-                    msg_id = data["result"]["message_id"]
-                    # ပို့ထားသောစာကို ချက်ချင်း ပြန်ဖျက်ခြင်း
-                    del_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
-                    del_payload = {"chat_id": BIN_CHANNEL, "message_id": msg_id}
-                    await session.post(del_url, json=del_payload)
-                    print("✅ Channel Sync Complete! PeerIdInvalid prevented.")
-                else:
-                    print(f"⚠️ Sync Failed: {data}")
-    except Exception as e:
-        print(f"Error syncing channel: {e}")
 
 # --- 2. File Extractor ---
 def encode_id(msg_id):
@@ -128,10 +104,31 @@ async def init_web():
     await site.start()
     print(f"Web server started on port {port}")
 
-# --- 5. Main Run Block ---
+# --- 5. Main Run Block (Auto-Sync စနစ်သစ်) ---
+async def main():
+    print("Bot is starting...")
+    await app.start() # 1. Bot ကို အရင်နှိုးမည်
+    
+    # 2. Web Server ကို စတင်မည်
+    loop.create_task(init_web())
+    
+    # 3. 🔴 အရေးကြီးဆုံးအဆင့်: Pyrogram ကိုယ်တိုင် Channel ကို သွားမှတ်ခိုင်းမည်
+    try:
+        await app.get_chat(BIN_CHANNEL)
+        print("✅ Channel Peer Cached Successfully! PeerIdInvalid will not happen.")
+    except Exception as e:
+        print(f"⚠️ get_chat failed, trying fallback... {e}")
+        try:
+            msg = await app.send_message(BIN_CHANNEL, "🔄 Syncing Peer...")
+            await msg.delete()
+            print("✅ Channel Peer Synced via fallback message!")
+        except Exception as e2:
+            print(f"❌ Ultimate Sync Failed: {e2}")
+
+    # 4. Bot ကို ဆက်လက် အလုပ်လုပ်စေမည်
+    await idle()
+    await app.stop()
+
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
-    loop.create_task(init_web())
-    loop.create_task(sync_channel_peer()) # 👈 Auto-Sync ကို ဒီနေရာမှာ စတင်ခိုင်းထားပါတယ်
-    print("Bot is starting...")
-    app.run()
+    loop.run_until_complete(main())
